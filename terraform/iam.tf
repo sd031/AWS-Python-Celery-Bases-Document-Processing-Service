@@ -140,7 +140,9 @@ resource "aws_iam_role_policy" "ecs_task_worker" {
           "dynamodb:UpdateItem",
           "dynamodb:DeleteItem",
           "dynamodb:Query",
-          "dynamodb:Scan"
+          "dynamodb:Scan",
+          "dynamodb:DescribeTable",
+          "dynamodb:CreateTable"
         ]
         Resource = [
           aws_dynamodb_table.jobs.arn,
@@ -153,6 +155,7 @@ resource "aws_iam_role_policy" "ecs_task_worker" {
         Action = [
           "sqs:ReceiveMessage",
           "sqs:DeleteMessage",
+          "sqs:SendMessage",
           "sqs:GetQueueAttributes",
           "sqs:ChangeMessageVisibility",
           "sqs:GetQueueUrl"

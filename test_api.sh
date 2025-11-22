@@ -26,8 +26,8 @@ echo -e "${GREEN}Testing API at: ${API_ENDPOINT}${NC}\n"
 # Test 1: Health check
 echo -e "${YELLOW}Test 1: Health Check${NC}"
 RESPONSE=$(curl -s -w "\n%{http_code}" "${API_ENDPOINT}/health")
-HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
-BODY=$(echo "$RESPONSE" | head -n-1)
+HTTP_CODE=$(echo "$RESPONSE" | tail -n 1)
+BODY=$(echo "$RESPONSE" | sed '$d')
 
 if [ "$HTTP_CODE" = "200" ]; then
     echo -e "${GREEN}✓ Health check passed${NC}"
@@ -47,11 +47,11 @@ if [ ! -f test_document.txt ]; then
 fi
 
 RESPONSE=$(curl -s -w "\n%{http_code}" -X POST "${API_ENDPOINT}/upload" \
-    -F "file=@document.pdf" \
-    -F "notification_email=sandip.sandip.das5@gmail.com")
+    -F "file=@sample.pdf" \
+    -F "notification_email=your@email.here")
 
-HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
-BODY=$(echo "$RESPONSE" | head -n-1)
+HTTP_CODE=$(echo "$RESPONSE" | tail -n 1)
+BODY=$(echo "$RESPONSE" | sed '$d')
 
 if [ "$HTTP_CODE" = "200" ]; then
     echo -e "${GREEN}✓ File upload successful${NC}"
@@ -65,8 +65,8 @@ if [ "$HTTP_CODE" = "200" ]; then
     sleep 2
     
     RESPONSE=$(curl -s -w "\n%{http_code}" "${API_ENDPOINT}/status/${JOB_ID}")
-    HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
-    BODY=$(echo "$RESPONSE" | head -n-1)
+    HTTP_CODE=$(echo "$RESPONSE" | tail -n 1)
+    BODY=$(echo "$RESPONSE" | sed '$d')
     
     if [ "$HTTP_CODE" = "200" ]; then
         echo -e "${GREEN}✓ Status check successful${NC}"
@@ -81,8 +81,8 @@ if [ "$HTTP_CODE" = "200" ]; then
     sleep 10
     
     RESPONSE=$(curl -s -w "\n%{http_code}" "${API_ENDPOINT}/results/${JOB_ID}")
-    HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
-    BODY=$(echo "$RESPONSE" | head -n-1)
+    HTTP_CODE=$(echo "$RESPONSE" | tail -n 1)
+    BODY=$(echo "$RESPONSE" | sed '$d')
     
     if [ "$HTTP_CODE" = "200" ]; then
         echo -e "${GREEN}✓ Results retrieved${NC}"

@@ -140,18 +140,28 @@ class MetadataProcessor:
                     
                     # Extract PDF info
                     if pdf.metadata:
-                        info = pdf.metadata
-                        metadata['title'] = info.get('/Title', '')
-                        metadata['author'] = info.get('/Author', '')
-                        metadata['subject'] = info.get('/Subject', '')
-                        metadata['creator'] = info.get('/Creator', '')
-                        metadata['producer'] = info.get('/Producer', '')
+                        # Helper function to safely extract string values
+                        def safe_str(value):
+                            if value is None:
+                                return ''
+                            # Handle IndirectObject by converting to string and cleaning
+                            val_str = str(value)
+                            # If it looks like an IndirectObject representation, return empty
+                            if 'IndirectObject' in val_str:
+                                return ''
+                            return val_str
+                        
+                        metadata['title'] = safe_str(pdf.metadata.get('/Title'))
+                        metadata['author'] = safe_str(pdf.metadata.get('/Author'))
+                        metadata['subject'] = safe_str(pdf.metadata.get('/Subject'))
+                        metadata['creator'] = safe_str(pdf.metadata.get('/Creator'))
+                        metadata['producer'] = safe_str(pdf.metadata.get('/Producer'))
                         
                         # Convert dates
-                        if '/CreationDate' in info:
-                            metadata['creation_date'] = str(info['/CreationDate'])
-                        if '/ModDate' in info:
-                            metadata['modification_date'] = str(info['/ModDate'])
+                        if '/CreationDate' in pdf.metadata:
+                            metadata['creation_date'] = safe_str(pdf.metadata['/CreationDate'])
+                        if '/ModDate' in pdf.metadata:
+                            metadata['modification_date'] = safe_str(pdf.metadata['/ModDate'])
                 
             except ImportError:
                 logger.warning("PyPDF2 not available for PDF metadata extraction")

@@ -44,8 +44,17 @@ def update_job_status(job_id: str, status: str, **kwargs):
         }
         expr_names = {'#status': 'status'}
         
+        # Reserved keywords in DynamoDB that need attribute name placeholders
+        reserved_keywords = ['error', 'message', 'data', 'timestamp']
+        
         for key, value in kwargs.items():
-            update_expr += f", {key} = :{key}"
+            if key.lower() in reserved_keywords:
+                # Use attribute name placeholder for reserved keywords
+                placeholder = f"#{key}"
+                update_expr += f", {placeholder} = :{key}"
+                expr_names[placeholder] = key
+            else:
+                update_expr += f", {key} = :{key}"
             expr_values[f':{key}'] = value
         
         table.update_item(
@@ -118,45 +127,67 @@ def process_document(self, job_id: str, s3_key: str, file_type: str):
         
         results = {}
         
-        # Extract metadata
+        # Extract metadata (run directly, not as separate task)
         update_job_status(job_id, 'processing', progress=20, message="Extracting metadata")
-        metadata = extract_metadata.delay(job_id, local_path, file_type).get()
+        metadata = metadata_processor.extract_metadata(local_path, file_type)
         results['metadata'] = metadata
+        logger.info(f"Extracted metadata for {job_id}")
         
         # Process based on file type
         if file_type.startswith('image/'):
-            # Generate thumbnail
+            # Generate thumbnail (run directly)
             update_job_status(job_id, 'processing', progress=40, message="Generating thumbnail")
-            thumbnail_url = generate_thumbnail.delay(job_id, local_path, s3_key).get()
-            results['thumbnail_url'] = thumbnail_url
+            thumbnail_path = thumbnail_processor.generate_thumbnail(local_path)
+            if thumbnail_path:
+                thumbnail_key = f"{S3_PROCESSED_PREFIX}{job_id}/thumbnail.jpg"
+                s3_client.upload_file(thumbnail_path, S3_BUCKET, thumbnail_key)
+                thumbnail_url = f"s3://{S3_BUCKET}/{thumbnail_key}"
+                results['thumbnail_url'] = thumbnail_url
+                os.remove(thumbnail_path)
+                logger.info(f"Generated thumbnail: {thumbnail_key}")
             
-            # Analyze image
+            # Analyze image (run directly)
             update_job_status(job_id, 'processing', progress=60, message="Analyzing image")
-            analysis = analyze_image.delay(job_id, s3_key).get()
+            analysis = image_analyzer.analyze_image(S3_BUCKET, s3_key)
             results['labels'] = analysis.get('labels', [])
             results['moderation'] = analysis.get('moderation', {})
+            logger.info(f"Analyzed image for {job_id}")
             
-            # OCR for images
+            # OCR for images (run directly)
             update_job_status(job_id, 'processing', progress=80, message="Extracting text")
-            ocr_text = extract_text_ocr.delay(job_id, s3_key).get()
+            ocr_text = ocr_processor.extract_text(S3_BUCKET, s3_key)
             results['ocr_text'] = ocr_text
+            logger.info(f"Extracted {len(ocr_text) if ocr_text else 0} characters from {s3_key}")
             
         elif file_type == 'application/pdf':
-            # Generate thumbnail for PDF
+            # Generate thumbnail for PDF (run directly)
             update_job_status(job_id, 'processing', progress=40, message="Generating thumbnail")
-            thumbnail_url = generate_thumbnail.delay(job_id, local_path, s3_key).get()
-            results['thumbnail_url'] = thumbnail_url
+            thumbnail_path = thumbnail_processor.generate_thumbnail(local_path)
+            if thumbnail_path:
+                thumbnail_key = f"{S3_PROCESSED_PREFIX}{job_id}/thumbnail.jpg"
+                s3_client.upload_file(thumbnail_path, S3_BUCKET, thumbnail_key)
+                thumbnail_url = f"s3://{S3_BUCKET}/{thumbnail_key}"
+                results['thumbnail_url'] = thumbnail_url
+                os.remove(thumbnail_path)
+                logger.info(f"Generated thumbnail: {thumbnail_key}")
             
-            # OCR for PDF
+            # OCR for PDF (run directly)
             update_job_status(job_id, 'processing', progress=70, message="Extracting text")
-            ocr_text = extract_text_ocr.delay(job_id, s3_key).get()
+            ocr_text = ocr_processor.extract_text(S3_BUCKET, s3_key)
             results['ocr_text'] = ocr_text
+            logger.info(f"Extracted {len(ocr_text) if ocr_text else 0} characters from {s3_key}")
             
         elif file_type.startswith('video/'):
-            # Generate video thumbnail
+            # Generate video thumbnail (run directly)
             update_job_status(job_id, 'processing', progress=60, message="Generating thumbnail")
-            thumbnail_url = generate_thumbnail.delay(job_id, local_path, s3_key).get()
-            results['thumbnail_url'] = thumbnail_url
+            thumbnail_path = thumbnail_processor.generate_thumbnail(local_path)
+            if thumbnail_path:
+                thumbnail_key = f"{S3_PROCESSED_PREFIX}{job_id}/thumbnail.jpg"
+                s3_client.upload_file(thumbnail_path, S3_BUCKET, thumbnail_key)
+                thumbnail_url = f"s3://{S3_BUCKET}/{thumbnail_key}"
+                results['thumbnail_url'] = thumbnail_url
+                os.remove(thumbnail_path)
+                logger.info(f"Generated thumbnail: {thumbnail_key}")
         
         # Clean up local file
         if os.path.exists(local_path):

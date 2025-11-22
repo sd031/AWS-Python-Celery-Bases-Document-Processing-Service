@@ -1,6 +1,7 @@
 import json
 import os
 import logging
+import base64
 import boto3
 from urllib.parse import unquote_plus
 
@@ -63,15 +64,50 @@ def lambda_handler(event, context):
                 logger.error(f"Failed to get object metadata: {e}")
                 continue
             
-            # Create Celery task message
+            # Create Celery task message in proper format
+            # Celery v5 with SQS expects this specific structure
             task_message = {
-                'task': 'worker.tasks.process_document',
-                'id': job_id,
-                'args': [job_id, key, content_type],
-                'kwargs': {},
-                'retries': 0,
-                'eta': None,
-                'expires': None
+                'body': base64.b64encode(json.dumps([
+                    [job_id, key, content_type],  # args
+                    {},  # kwargs
+                    {
+                        'callbacks': None,
+                        'errbacks': None,
+                        'chain': None,
+                        'chord': None
+                    }
+                ]).encode()).decode(),
+                'content-encoding': 'utf-8',
+                'content-type': 'application/json',
+                'headers': {
+                    'lang': 'py',
+                    'task': 'worker.tasks.process_document',
+                    'id': job_id,
+                    'shadow': None,
+                    'eta': None,
+                    'expires': None,
+                    'group': None,
+                    'group_index': None,
+                    'retries': 0,
+                    'timelimit': [None, None],
+                    'root_id': job_id,
+                    'parent_id': None,
+                    'argsrepr': f'({job_id!r}, {key!r}, {content_type!r})',
+                    'kwargsrepr': '{}',
+                    'origin': 'lambda@s3-trigger'
+                },
+                'properties': {
+                    'correlation_id': job_id,
+                    'reply_to': None,
+                    'delivery_mode': 2,
+                    'delivery_info': {
+                        'exchange': '',
+                        'routing_key': 'celery'
+                    },
+                    'priority': 0,
+                    'body_encoding': 'base64',
+                    'delivery_tag': job_id
+                }
             }
             
             # Send message to SQS
@@ -79,17 +115,7 @@ def lambda_handler(event, context):
                 try:
                     response = sqs_client.send_message(
                         QueueUrl=SQS_QUEUE_URL,
-                        MessageBody=json.dumps(task_message),
-                        MessageAttributes={
-                            'job_id': {
-                                'StringValue': job_id,
-                                'DataType': 'String'
-                            },
-                            'content_type': {
-                                'StringValue': content_type,
-                                'DataType': 'String'
-                            }
-                        }
+                        MessageBody=json.dumps(task_message)
                     )
                     
                     logger.info(f"Enqueued task for job {job_id}: {response['MessageId']}")
