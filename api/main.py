@@ -167,6 +167,31 @@ def update_job_status(job_id: str, status: JobStatus, **kwargs):
         logger.error(f"Failed to update job status: {e}")
 
 
+def generate_presigned_url(s3_path: str, expiration: int = 3600) -> Optional[str]:
+    """Generate a pre-signed URL for an S3 object."""
+    if not s3_path or not s3_path.startswith('s3://'):
+        return None
+    
+    try:
+        # Parse S3 path: s3://bucket/key
+        parts = s3_path.replace('s3://', '').split('/', 1)
+        if len(parts) != 2:
+            return None
+        
+        bucket, key = parts
+        
+        # Generate pre-signed URL
+        url = s3_client.generate_presigned_url(
+            'get_object',
+            Params={'Bucket': bucket, 'Key': key},
+            ExpiresIn=expiration
+        )
+        return url
+    except Exception as e:
+        logger.error(f"Failed to generate pre-signed URL for {s3_path}: {e}")
+        return None
+
+
 # Auth Endpoints
 @app.post("/auth/signup", response_model=AuthResponse)
 async def signup(request: SignupRequest):
@@ -378,6 +403,13 @@ async def get_results(job_id: str):
         results_data = job.get('results')
         if isinstance(results_data, str):
             results_data = json.loads(results_data)
+        
+        # Convert S3 paths to pre-signed URLs
+        if 'thumbnail_url' in results_data and results_data['thumbnail_url']:
+            presigned_url = generate_presigned_url(results_data['thumbnail_url'])
+            if presigned_url:
+                results_data['thumbnail_url'] = presigned_url
+        
         results = ProcessingResult(**results_data)
     
     return ResultsResponse(
@@ -405,6 +437,21 @@ async def list_jobs():
         # Scan table (in production, use user_id index)
         response = jobs_table.scan(Limit=50)
         jobs = response.get('Items', [])
+        
+        # Convert S3 paths to pre-signed URLs in results
+        for job in jobs:
+            if job.get('results'):
+                results_data = job.get('results')
+                if isinstance(results_data, str):
+                    try:
+                        results_data = json.loads(results_data)
+                        if 'thumbnail_url' in results_data and results_data['thumbnail_url']:
+                            presigned_url = generate_presigned_url(results_data['thumbnail_url'])
+                            if presigned_url:
+                                results_data['thumbnail_url'] = presigned_url
+                        job['results'] = json.dumps(results_data)
+                    except:
+                        pass
         
         # Sort by created_at descending
         jobs.sort(key=lambda x: x.get('created_at', ''), reverse=True)

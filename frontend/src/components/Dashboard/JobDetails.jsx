@@ -171,9 +171,19 @@ export default function JobDetails({ job, onUpdate }) {
               <div className="bg-gray-50 rounded-lg p-4">
                 <h4 className="text-xs font-medium text-gray-700 mb-2 flex items-center">
                   <Image className="h-4 w-4 mr-1" />
-                  Thumbnail
+                  Thumbnail Preview
                 </h4>
-                <p className="text-xs text-gray-600 break-all">{details.results.thumbnail_url}</p>
+                <div className="mt-2 flex justify-center bg-white rounded-lg border border-gray-200 p-2">
+                  <img 
+                    src={details.results.thumbnail_url} 
+                    alt="Document thumbnail"
+                    className="max-w-full max-h-64 object-contain rounded"
+                    onError={(e) => {
+                      e.target.onerror = null;
+                      e.target.src = 'data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg" width="200" height="200"%3E%3Crect fill="%23f3f4f6" width="200" height="200"/%3E%3Ctext x="50%25" y="50%25" dominant-baseline="middle" text-anchor="middle" fill="%239ca3af" font-family="sans-serif" font-size="14"%3EImage not available%3C/text%3E%3C/svg%3E';
+                    }}
+                  />
+                </div>
               </div>
             )}
 
