@@ -1,0 +1,2 @@
+This is a test document for the document processing service.
+It contains sample text for testing OCR and processing capabilities.
