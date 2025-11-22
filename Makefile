@@ -1,4 +1,4 @@
-.PHONY: help deploy cleanup test logs-api logs-worker build-api build-worker push-api push-worker update-images
+.PHONY: help deploy cleanup test logs-api logs-worker logs-frontend build-api build-worker build-frontend update-images
 
 # Variables
 PROJECT_NAME := doc-processor
@@ -44,11 +44,16 @@ build-worker:
 	@echo "Building Worker Docker image for linux/amd64..."
 	@docker build --platform linux/amd64 -f docker/worker.Dockerfile -t $(PROJECT_NAME)-worker:latest .
 
+build-frontend:
+	@echo "Building Frontend Docker image for linux/amd64..."
+	@docker build --platform linux/amd64 -f docker/frontend.Dockerfile -t $(PROJECT_NAME)-frontend:latest .
+
 update-images:
 	@echo "Updating Docker images and redeploying ECS services..."
 	@echo "Getting ECR repository URLs..."
 	@$(eval API_REPO := $(shell cd terraform && terraform output -raw ecr_api_repository 2>/dev/null))
 	@$(eval WORKER_REPO := $(shell cd terraform && terraform output -raw ecr_worker_repository 2>/dev/null))
+	@$(eval FRONTEND_REPO := $(shell cd terraform && terraform output -raw ecr_frontend_repository 2>/dev/null))
 	@echo "Logging into ECR..."
 	@aws ecr get-login-password --region $(AWS_REGION) | docker login --username AWS --password-stdin $(shell aws sts get-caller-identity --query Account --output text).dkr.ecr.$(AWS_REGION).amazonaws.com
 	@echo "Building and pushing API image..."
@@ -59,9 +64,14 @@ update-images:
 	@docker build --platform linux/amd64 -f docker/worker.Dockerfile -t $(PROJECT_NAME)-worker:latest .
 	@docker tag $(PROJECT_NAME)-worker:latest $(WORKER_REPO):latest
 	@docker push $(WORKER_REPO):latest
+	@echo "Building and pushing Frontend image..."
+	@docker build --platform linux/amd64 -f docker/frontend.Dockerfile -t $(PROJECT_NAME)-frontend:latest .
+	@docker tag $(PROJECT_NAME)-frontend:latest $(FRONTEND_REPO):latest
+	@docker push $(FRONTEND_REPO):latest
 	@echo "Forcing ECS services to update..."
 	@aws ecs update-service --cluster $(PROJECT_NAME)-cluster --service $(PROJECT_NAME)-api-service --force-new-deployment --region $(AWS_REGION) > /dev/null
 	@aws ecs update-service --cluster $(PROJECT_NAME)-cluster --service $(PROJECT_NAME)-worker-service --force-new-deployment --region $(AWS_REGION) > /dev/null
+	@aws ecs update-service --cluster $(PROJECT_NAME)-cluster --service $(PROJECT_NAME)-frontend-service --force-new-deployment --region $(AWS_REGION) > /dev/null
 	@echo "✓ Images updated and services redeploying with new images"
 
 test:
@@ -80,6 +90,10 @@ logs-worker:
 logs-lambda:
 	@echo "Tailing Lambda logs..."
 	@aws logs tail /aws/lambda/$(PROJECT_NAME)-s3-trigger --follow --region $(AWS_REGION)
+
+logs-frontend:
+	@echo "Tailing Frontend logs..."
+	@aws logs tail /aws/ecs/$(PROJECT_NAME)-frontend --follow --region $(AWS_REGION)
 
 status:
 	@echo "Checking deployment status..."

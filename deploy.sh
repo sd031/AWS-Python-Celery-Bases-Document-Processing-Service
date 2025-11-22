@@ -105,15 +105,17 @@ terraform init
 
 # Create ECR repositories first
 echo -e "\n${YELLOW}Creating ECR repositories...${NC}"
-terraform apply -target=aws_ecr_repository.api -target=aws_ecr_repository.worker -auto-approve
+terraform apply -target=aws_ecr_repository.api -target=aws_ecr_repository.worker -target=aws_ecr_repository.frontend -auto-approve
 
 # Get ECR repository URLs
 API_REPO=$(terraform output -raw ecr_api_repository)
 WORKER_REPO=$(terraform output -raw ecr_worker_repository)
+FRONTEND_REPO=$(terraform output -raw ecr_frontend_repository)
 
 echo -e "${GREEN}✓ ECR repositories created${NC}"
 echo -e "  API: ${API_REPO}"
 echo -e "  Worker: ${WORKER_REPO}"
+echo -e "  Frontend: ${FRONTEND_REPO}"
 
 cd ..
 
@@ -141,6 +143,16 @@ echo -e "${GREEN}✓ Built Worker image${NC}"
 echo -e "\n${YELLOW}Pushing Worker image to ECR...${NC}"
 docker push ${WORKER_REPO}:latest
 echo -e "${GREEN}✓ Pushed Worker image${NC}"
+
+# Build and push Frontend image
+echo -e "\n${YELLOW}Building Frontend Docker image for linux/amd64...${NC}"
+docker build --platform linux/amd64 -f docker/frontend.Dockerfile -t ${PROJECT_NAME}-frontend:latest .
+docker tag ${PROJECT_NAME}-frontend:latest ${FRONTEND_REPO}:latest
+echo -e "${GREEN}✓ Built Frontend image${NC}"
+
+echo -e "\n${YELLOW}Pushing Frontend image to ECR...${NC}"
+docker push ${FRONTEND_REPO}:latest
+echo -e "${GREEN}✓ Pushed Frontend image${NC}"
 
 # Deploy infrastructure
 echo -e "\n${YELLOW}Deploying infrastructure with Terraform...${NC}"
@@ -191,91 +203,8 @@ else
     echo -e "${YELLOW}⚠ API might still be starting up. Please wait a few minutes and try again.${NC}"
 fi
 
-# Deploy Frontend
-echo -e "\n${GREEN}========================================${NC}"
-echo -e "${GREEN}Deploying Frontend${NC}"
-echo -e "${GREEN}========================================${NC}"
-
-if [ -d "frontend" ]; then
-    echo -e "${YELLOW}Building and deploying frontend...${NC}"
-    
-    # Get frontend infrastructure info
-    FRONTEND_BUCKET=$(cd terraform && terraform output -raw frontend_bucket 2>/dev/null || echo "")
-    CLOUDFRONT_ID=$(cd terraform && terraform output -raw cloudfront_distribution_id 2>/dev/null || echo "")
-    FRONTEND_URL=$(cd terraform && terraform output -raw frontend_url 2>/dev/null || echo "")
-    
-    if [ -z "$FRONTEND_BUCKET" ]; then
-        echo -e "${YELLOW}Frontend infrastructure not found in outputs. Skipping frontend deployment.${NC}"
-        echo -e "${YELLOW}Frontend will be available after Terraform creates the resources.${NC}"
-    else
-        echo -e "${GREEN}✓ Frontend Bucket: ${FRONTEND_BUCKET}${NC}"
-        echo -e "${GREEN}✓ CloudFront Distribution: ${CLOUDFRONT_ID}${NC}"
-        
-        cd frontend
-        
-        # Check if Node.js is installed
-        if ! command -v node &> /dev/null; then
-            echo -e "${YELLOW}⚠ Node.js not installed. Skipping frontend build.${NC}"
-            echo -e "${YELLOW}  Install Node.js and run: cd frontend && npm install && npm run build${NC}"
-        else
-            # Install dependencies if needed
-            if [ ! -d "node_modules" ]; then
-                echo -e "${YELLOW}Installing frontend dependencies...${NC}"
-                npm install
-            fi
-            
-            # Create .env file with API endpoint
-            echo -e "${YELLOW}Configuring frontend environment...${NC}"
-            cat > .env << EOF
-VITE_API_URL=${API_ENDPOINT}
-EOF
-            echo -e "${GREEN}✓ Created .env file${NC}"
-            
-            # Build frontend
-            echo -e "${YELLOW}Building frontend...${NC}"
-            npm run build
-            
-            if [ -d "dist" ]; then
-                echo -e "${GREEN}✓ Frontend built successfully${NC}"
-                
-                # Upload to S3
-                echo -e "${YELLOW}Uploading to S3...${NC}"
-                aws s3 sync dist/ s3://${FRONTEND_BUCKET}/ \
-                    --delete \
-                    --region ${AWS_REGION} \
-                    --cache-control "public, max-age=31536000" \
-                    --exclude "index.html"
-                
-                # Upload index.html with no-cache
-                aws s3 cp dist/index.html s3://${FRONTEND_BUCKET}/index.html \
-                    --region ${AWS_REGION} \
-                    --cache-control "no-cache, no-store, must-revalidate" \
-                    --content-type "text/html"
-                
-                echo -e "${GREEN}✓ Files uploaded to S3${NC}"
-                
-                # Invalidate CloudFront cache
-                echo -e "${YELLOW}Invalidating CloudFront cache...${NC}"
-                INVALIDATION_ID=$(aws cloudfront create-invalidation \
-                    --distribution-id ${CLOUDFRONT_ID} \
-                    --paths "/*" \
-                    --region ${AWS_REGION} \
-                    --query 'Invalidation.Id' \
-                    --output text 2>/dev/null || echo "")
-                
-                if [ -n "$INVALIDATION_ID" ]; then
-                    echo -e "${GREEN}✓ CloudFront invalidation created: ${INVALIDATION_ID}${NC}"
-                fi
-            else
-                echo -e "${RED}✗ Frontend build failed${NC}"
-            fi
-        fi
-        
-        cd ..
-    fi
-else
-    echo -e "${YELLOW}Frontend directory not found. Skipping frontend deployment.${NC}"
-fi
+# Get Frontend URL
+FRONTEND_URL=$(cd terraform && terraform output -raw frontend_url 2>/dev/null || echo "")
 
 echo -e "\n${GREEN}========================================${NC}"
 echo -e "${GREEN}Deployment Summary${NC}"
@@ -283,7 +212,7 @@ echo -e "${GREEN}========================================${NC}"
 echo -e "${GREEN}Backend API:${NC} ${API_ENDPOINT}"
 if [ -n "$FRONTEND_URL" ]; then
     echo -e "${GREEN}Frontend URL:${NC} ${FRONTEND_URL}"
-    echo -e "${YELLOW}Note: CloudFront may take 5-10 minutes to fully deploy${NC}"
+    echo -e "${YELLOW}Note: Frontend may take 2-3 minutes to become available${NC}"
 fi
 echo -e "${GREEN}S3 Bucket:${NC} ${S3_BUCKET}"
 echo -e "${GREEN}Region:${NC} ${AWS_REGION}"
@@ -302,15 +231,12 @@ else
     echo -e "   curl -X POST ${API_ENDPOINT}/upload -F \"file=@document.pdf\""
 fi
 echo -e "\n3. Check CloudWatch logs:"
-echo -e "   aws logs tail /aws/ecs/${PROJECT_NAME}-api --follow"
-echo -e "   aws logs tail /aws/ecs/${PROJECT_NAME}-worker --follow"
+echo -e "   make logs-api      # API logs"
+echo -e "   make logs-worker   # Worker logs"
+echo -e "   make logs-frontend # Frontend logs"
 echo -e "\n4. Monitor in AWS Console:"
 echo -e "   - ECS: https://console.aws.amazon.com/ecs/home?region=${AWS_REGION}"
 echo -e "   - S3: https://console.aws.amazon.com/s3/buckets/${S3_BUCKET}"
-if [ -n "$FRONTEND_BUCKET" ]; then
-    echo -e "   - Frontend S3: https://console.aws.amazon.com/s3/buckets/${FRONTEND_BUCKET}"
-    echo -e "   - CloudFront: https://console.aws.amazon.com/cloudfront/home?region=${AWS_REGION}"
-fi
 echo -e "   - CloudWatch: https://console.aws.amazon.com/cloudwatch/home?region=${AWS_REGION}"
 
 echo -e "\n${GREEN}Deployment completed successfully!${NC}"
