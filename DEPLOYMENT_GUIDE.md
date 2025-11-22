@@ -22,7 +22,13 @@ Before deploying, ensure you have:
    ```
    **Note**: The deployment builds images for `linux/amd64` architecture (required for ECS Fargate). If you're on an ARM Mac (M1/M2/M3), Docker will automatically use emulation.
 
-5. **jq** (for testing scripts)
+5. **Node.js 18+** and npm (for frontend)
+   ```bash
+   node --version
+   npm --version
+   ```
+
+6. **jq** (for testing scripts)
    ```bash
    brew install jq  # macOS
    ```
@@ -58,17 +64,29 @@ chmod +x deploy.sh
 The deployment script will:
 1. ✓ Verify prerequisites
 2. ✓ Create ECR repositories
-3. ✓ Build Docker images
+3. ✓ Build Docker images (API & Worker)
 4. ✓ Push images to ECR
 5. ✓ Deploy infrastructure via Terraform
-6. ✓ Output API endpoint and resource details
+6. ✓ Build and deploy React frontend
+7. ✓ Upload frontend to S3 + CloudFront
+8. ✓ Output API endpoint, frontend URL, and resource details
 
-**Estimated time**: 10-15 minutes
+**Estimated time**: 15-20 minutes (includes frontend build)
 
 ### 4. Verify Deployment
 
-After deployment completes, test the API:
+After deployment completes, you can access the application:
 
+**Frontend (Recommended)**:
+```bash
+# Get the frontend URL from deployment output
+# Visit: https://YOUR-CLOUDFRONT-DOMAIN.cloudfront.net
+# 1. Sign up for an account
+# 2. Upload documents
+# 3. Track progress in real-time
+```
+
+**API (Direct)**:
 ```bash
 # Test health endpoint
 curl http://YOUR-ALB-DNS/health
@@ -77,6 +95,8 @@ curl http://YOUR-ALB-DNS/health
 chmod +x test_api.sh
 ./test_api.sh
 ```
+
+**Note**: CloudFront distribution may take 5-10 minutes to fully deploy after the script completes.
 
 ## What Gets Deployed
 
@@ -87,8 +107,12 @@ chmod +x test_api.sh
 | VPC | Network isolation | Free |
 | ECS Fargate | API & Worker containers | ~$30-50/month |
 | Application Load Balancer | API routing | ~$16/month |
-| S3 Bucket | File storage | ~$0.023/GB |
-| DynamoDB | Job tracking & results | Pay per request |
+| S3 Bucket (Documents) | File storage | ~$0.023/GB |
+| S3 Bucket (Frontend) | Static website hosting | ~$0.023/GB |
+| CloudFront | CDN for frontend | ~$0.085/GB transfer |
+| DynamoDB (Jobs) | Job tracking | Pay per request |
+| DynamoDB (Users) | User authentication | Pay per request |
+| DynamoDB (Results) | Celery results | Pay per request |
 | SQS | Task queue | First 1M requests free |
 | Lambda | S3 event trigger | First 1M requests free |
 | SNS | Notifications | First 1,000 emails free |

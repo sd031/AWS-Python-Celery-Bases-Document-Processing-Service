@@ -75,7 +75,9 @@ resource "aws_iam_role_policy" "ecs_task_api" {
         ]
         Resource = [
           aws_dynamodb_table.jobs.arn,
-          "${aws_dynamodb_table.jobs.arn}/index/*"
+          "${aws_dynamodb_table.jobs.arn}/index/*",
+          aws_dynamodb_table.users.arn,
+          "${aws_dynamodb_table.users.arn}/index/*"
         ]
       },
       {

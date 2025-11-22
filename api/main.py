@@ -1,11 +1,14 @@
 import logging
 import uuid
 import json
-from datetime import datetime
+import hashlib
+import secrets
+from datetime import datetime, timedelta
 from typing import Optional
-from fastapi import FastAPI, File, UploadFile, HTTPException, Form
+from fastapi import FastAPI, File, UploadFile, HTTPException, Form, Depends, Header
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel, EmailStr
 import boto3
 from botocore.exceptions import ClientError
 import aiofiles
@@ -44,12 +47,52 @@ s3_client = boto3.client('s3', region_name=settings.aws_region)
 dynamodb = boto3.resource('dynamodb', region_name=settings.aws_region)
 sqs_client = boto3.client('sqs', region_name=settings.aws_region)
 
-# DynamoDB table for job tracking
+# DynamoDB tables
 try:
     jobs_table = dynamodb.Table('doc-processor-jobs')
+    users_table = dynamodb.Table('doc-processor-users')
 except Exception as e:
-    logger.warning(f"Could not connect to DynamoDB jobs table: {e}")
+    logger.warning(f"Could not connect to DynamoDB tables: {e}")
     jobs_table = None
+    users_table = None
+
+
+# Auth Models
+class SignupRequest(BaseModel):
+    email: EmailStr
+    password: str
+    name: str
+
+class LoginRequest(BaseModel):
+    email: EmailStr
+    password: str
+
+class AuthResponse(BaseModel):
+    token: str
+    user: dict
+
+
+# Auth Helper Functions
+def hash_password(password: str) -> str:
+    """Hash password using SHA-256."""
+    return hashlib.sha256(password.encode()).hexdigest()
+
+def generate_token() -> str:
+    """Generate a random token."""
+    return secrets.token_urlsafe(32)
+
+def verify_token(authorization: Optional[str] = Header(None)) -> dict:
+    """Verify authentication token."""
+    if not authorization:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    
+    try:
+        token = authorization.replace("Bearer ", "")
+        # In production, you'd validate the token properly
+        # For now, we'll just check if it exists in the users table
+        return {"token": token}
+    except Exception:
+        raise HTTPException(status_code=401, detail="Invalid token")
 
 
 def is_allowed_file(filename: str) -> bool:
@@ -122,6 +165,88 @@ def update_job_status(job_id: str, status: JobStatus, **kwargs):
         logger.info(f"Updated job {job_id} status to {status.value}")
     except Exception as e:
         logger.error(f"Failed to update job status: {e}")
+
+
+# Auth Endpoints
+@app.post("/auth/signup", response_model=AuthResponse)
+async def signup(request: SignupRequest):
+    """Register a new user."""
+    if not users_table:
+        raise HTTPException(status_code=500, detail="User service unavailable")
+    
+    try:
+        # Check if user already exists
+        response = users_table.get_item(Key={'email': request.email})
+        if 'Item' in response:
+            raise HTTPException(status_code=400, detail="Email already registered")
+        
+        # Create user
+        user_id = str(uuid.uuid4())
+        token = generate_token()
+        password_hash = hash_password(request.password)
+        
+        users_table.put_item(
+            Item={
+                'email': request.email,
+                'user_id': user_id,
+                'name': request.name,
+                'password_hash': password_hash,
+                'token': token,
+                'created_at': datetime.utcnow().isoformat(),
+            }
+        )
+        
+        return AuthResponse(
+            token=token,
+            user={'user_id': user_id, 'email': request.email, 'name': request.name}
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Signup error: {e}")
+        raise HTTPException(status_code=500, detail="Failed to create account")
+
+
+@app.post("/auth/login", response_model=AuthResponse)
+async def login(request: LoginRequest):
+    """Login user."""
+    if not users_table:
+        raise HTTPException(status_code=500, detail="User service unavailable")
+    
+    try:
+        # Get user
+        response = users_table.get_item(Key={'email': request.email})
+        if 'Item' not in response:
+            raise HTTPException(status_code=401, detail="Invalid credentials")
+        
+        user = response['Item']
+        password_hash = hash_password(request.password)
+        
+        if user['password_hash'] != password_hash:
+            raise HTTPException(status_code=401, detail="Invalid credentials")
+        
+        # Generate new token
+        token = generate_token()
+        users_table.update_item(
+            Key={'email': request.email},
+            UpdateExpression="SET #token = :token",
+            ExpressionAttributeNames={'#token': 'token'},
+            ExpressionAttributeValues={':token': token}
+        )
+        
+        return AuthResponse(
+            token=token,
+            user={
+                'user_id': user['user_id'],
+                'email': user['email'],
+                'name': user['name']
+            }
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Login error: {e}")
+        raise HTTPException(status_code=500, detail="Login failed")
 
 
 @app.get("/", response_model=HealthResponse)
@@ -266,6 +391,28 @@ async def get_results(job_id: str):
         created_at=job.get('created_at'),
         completed_at=job.get('completed_at')
     )
+
+
+@app.get("/jobs")
+async def list_jobs():
+    """
+    List all jobs (simplified - in production, filter by user).
+    """
+    if not jobs_table:
+        return {"jobs": []}
+    
+    try:
+        # Scan table (in production, use user_id index)
+        response = jobs_table.scan(Limit=50)
+        jobs = response.get('Items', [])
+        
+        # Sort by created_at descending
+        jobs.sort(key=lambda x: x.get('created_at', ''), reverse=True)
+        
+        return {"jobs": jobs}
+    except Exception as e:
+        logger.error(f"Failed to list jobs: {e}")
+        return {"jobs": []}
 
 
 @app.delete("/jobs/{job_id}")

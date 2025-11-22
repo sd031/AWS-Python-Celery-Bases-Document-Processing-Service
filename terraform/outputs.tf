@@ -53,11 +53,28 @@ output "vpc_id" {
   value       = aws_vpc.main.id
 }
 
+output "frontend_bucket" {
+  description = "Frontend S3 bucket name"
+  value       = aws_s3_bucket.frontend.id
+}
+
+output "frontend_url" {
+  description = "Frontend CloudFront URL"
+  value       = "https://${aws_cloudfront_distribution.frontend.domain_name}"
+}
+
+output "cloudfront_distribution_id" {
+  description = "CloudFront distribution ID"
+  value       = aws_cloudfront_distribution.frontend.id
+}
+
 output "deployment_info" {
   description = "Deployment information"
   value = {
     api_endpoint           = "http://${aws_lb.api.dns_name}"
+    frontend_url          = "https://${aws_cloudfront_distribution.frontend.domain_name}"
     s3_bucket             = aws_s3_bucket.documents.id
+    frontend_bucket       = aws_s3_bucket.frontend.id
     region                = var.aws_region
     account_id            = local.account_id
   }
