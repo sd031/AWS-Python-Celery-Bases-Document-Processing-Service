@@ -82,16 +82,37 @@ def generate_token() -> str:
     return secrets.token_urlsafe(32)
 
 def verify_token(authorization: Optional[str] = Header(None)) -> dict:
-    """Verify authentication token."""
+    """Verify authentication token and return user info."""
     if not authorization:
         raise HTTPException(status_code=401, detail="Not authenticated")
     
+    if not users_table:
+        raise HTTPException(status_code=500, detail="Authentication service unavailable")
+    
     try:
         token = authorization.replace("Bearer ", "")
-        # In production, you'd validate the token properly
-        # For now, we'll just check if it exists in the users table
-        return {"token": token}
-    except Exception:
+        
+        # Scan for user with this token (in production, use a token index)
+        response = users_table.scan(
+            FilterExpression='#token = :token',
+            ExpressionAttributeNames={'#token': 'token'},
+            ExpressionAttributeValues={':token': token}
+        )
+        
+        users = response.get('Items', [])
+        if not users:
+            raise HTTPException(status_code=401, detail="Invalid or expired token")
+        
+        user = users[0]
+        return {
+            "user_id": user['user_id'],
+            "email": user['email'],
+            "name": user.get('name', '')
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Token verification failed: {e}")
         raise HTTPException(status_code=401, detail="Invalid token")
 
 
@@ -101,7 +122,7 @@ def is_allowed_file(filename: str) -> bool:
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in allowed
 
 
-def create_job_record(job_id: str, s3_key: str, file_info: dict, email: Optional[str] = None):
+def create_job_record(job_id: str, s3_key: str, file_info: dict, user_id: Optional[str] = None, email: Optional[str] = None):
     """Create a job record in DynamoDB."""
     if not jobs_table:
         logger.warning("Jobs table not available, skipping record creation")
@@ -111,6 +132,7 @@ def create_job_record(job_id: str, s3_key: str, file_info: dict, email: Optional
         jobs_table.put_item(
             Item={
                 'job_id': job_id,
+                'user_id': user_id or '',
                 'status': JobStatus.PENDING.value,
                 's3_key': s3_key,
                 'file_name': file_info['filename'],
@@ -289,13 +311,16 @@ async def health():
 @app.post("/upload", response_model=UploadResponse)
 async def upload_file(
     file: UploadFile = File(...),
-    notification_email: Optional[str] = Form(None)
+    notification_email: Optional[str] = Form(None),
+    current_user: dict = Depends(verify_token)
 ):
     """
     Upload a file for processing.
     
     - **file**: The file to upload (PDF, image, or video)
     - **notification_email**: Optional email for completion notification
+    
+    Requires authentication.
     """
     # Validate file
     if not file.filename:
@@ -343,7 +368,7 @@ async def upload_file(
             'size': file_size,
             'content_type': file.content_type or 'application/octet-stream'
         }
-        create_job_record(job_id, s3_key, file_info, notification_email)
+        create_job_record(job_id, s3_key, file_info, current_user['user_id'], notification_email)
         
         return UploadResponse(
             job_id=job_id,
@@ -362,16 +387,22 @@ async def upload_file(
 
 
 @app.get("/status/{job_id}", response_model=StatusResponse)
-async def get_status(job_id: str):
+async def get_status(job_id: str, current_user: dict = Depends(verify_token)):
     """
     Get the processing status of a job.
     
     - **job_id**: The unique job identifier returned from upload
+    
+    Requires authentication.
     """
     job = get_job_record(job_id)
     
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
+    
+    # Verify job belongs to user
+    if job.get('user_id') != current_user['user_id']:
+        raise HTTPException(status_code=403, detail="Access denied")
     
     return StatusResponse(
         job_id=job_id,
@@ -384,16 +415,22 @@ async def get_status(job_id: str):
 
 
 @app.get("/results/{job_id}", response_model=ResultsResponse)
-async def get_results(job_id: str):
+async def get_results(job_id: str, current_user: dict = Depends(verify_token)):
     """
     Get the processing results for a completed job.
     
     - **job_id**: The unique job identifier returned from upload
+    
+    Requires authentication.
     """
     job = get_job_record(job_id)
     
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
+    
+    # Verify job belongs to user
+    if job.get('user_id') != current_user['user_id']:
+        raise HTTPException(status_code=403, detail="Access denied")
     
     status = JobStatus(job.get('status', 'pending'))
     
@@ -426,16 +463,22 @@ async def get_results(job_id: str):
 
 
 @app.get("/jobs")
-async def list_jobs():
+async def list_jobs(current_user: dict = Depends(verify_token)):
     """
-    List all jobs (simplified - in production, filter by user).
+    List all jobs for the authenticated user.
+    
+    Requires authentication.
     """
     if not jobs_table:
         return {"jobs": []}
     
     try:
-        # Scan table (in production, use user_id index)
-        response = jobs_table.scan(Limit=50)
+        # Filter jobs by user_id
+        response = jobs_table.scan(
+            FilterExpression='user_id = :user_id',
+            ExpressionAttributeValues={':user_id': current_user['user_id']},
+            Limit=100
+        )
         jobs = response.get('Items', [])
         
         # Convert S3 paths to pre-signed URLs in results
@@ -463,16 +506,22 @@ async def list_jobs():
 
 
 @app.delete("/jobs/{job_id}")
-async def delete_job(job_id: str):
+async def delete_job(job_id: str, current_user: dict = Depends(verify_token)):
     """
     Delete a job and its associated files.
     
     - **job_id**: The unique job identifier
+    
+    Requires authentication.
     """
     job = get_job_record(job_id)
     
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
+    
+    # Verify job belongs to user
+    if job.get('user_id') != current_user['user_id']:
+        raise HTTPException(status_code=403, detail="Access denied")
     
     try:
         # Delete S3 objects
