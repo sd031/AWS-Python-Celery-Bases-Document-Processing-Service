@@ -32,50 +32,93 @@ if [ -f .env ]; then
     echo -e "${GREEN}✓ Loaded .env file${NC}"
 fi
 
-# Empty S3 bucket before deletion
-if [ ! -z "$S3_BUCKET_NAME" ]; then
-    echo -e "\n${YELLOW}Emptying S3 bucket...${NC}"
-    
-    if aws s3 ls "s3://${S3_BUCKET_NAME}" 2>/dev/null; then
-        echo -e "Deleting all objects in ${S3_BUCKET_NAME}..."
-        aws s3 rm "s3://${S3_BUCKET_NAME}" --recursive
-        
-        # Delete all versions if versioning is enabled
-        aws s3api list-object-versions \
-            --bucket "${S3_BUCKET_NAME}" \
-            --output json \
-            --query 'Versions[].{Key:Key,VersionId:VersionId}' \
-            2>/dev/null | \
-        jq -r '.[] | "--key \"\(.Key)\" --version-id \"\(.VersionId)\""' | \
-        xargs -I {} aws s3api delete-object --bucket "${S3_BUCKET_NAME}" {} 2>/dev/null || true
-        
-        # Delete delete markers
-        aws s3api list-object-versions \
-            --bucket "${S3_BUCKET_NAME}" \
-            --output json \
-            --query 'DeleteMarkers[].{Key:Key,VersionId:VersionId}' \
-            2>/dev/null | \
-        jq -r '.[] | "--key \"\(.Key)\" --version-id \"\(.VersionId)\""' | \
-        xargs -I {} aws s3api delete-object --bucket "${S3_BUCKET_NAME}" {} 2>/dev/null || true
-        
-        echo -e "${GREEN}✓ S3 bucket emptied${NC}"
-    else
-        echo -e "${YELLOW}S3 bucket not found or already deleted${NC}"
+# Empty S3 buckets before deletion
+echo -e "\n${YELLOW}Emptying S3 buckets...${NC}"
+
+# List of buckets to empty (from .env and hardcoded bucket name)
+BUCKETS=("${S3_BUCKET_NAME}" "aws-celery-demo")
+
+for BUCKET in "${BUCKETS[@]}"; do
+    if [ -z "$BUCKET" ]; then
+        continue
     fi
-fi
+    
+    if aws s3 ls "s3://${BUCKET}" 2>/dev/null; then
+        echo -e "Emptying bucket: ${BUCKET}..."
+        
+        # Delete all current objects first
+        echo "  Deleting current objects..."
+        aws s3 rm "s3://${BUCKET}" --recursive 2>/dev/null || true
+        
+        # Delete all object versions and delete markers
+        echo "  Deleting all versions and delete markers..."
+        
+        # Get all versions and delete markers in one go
+        VERSIONS=$(aws s3api list-object-versions \
+            --bucket "${BUCKET}" \
+            --output json \
+            --max-items 1000 2>/dev/null || echo '{}')
+        
+        # Process versions
+        echo "$VERSIONS" | jq -r '.Versions[]? | .Key + " " + .VersionId' | while read -r key version_id; do
+            if [ ! -z "$key" ] && [ ! -z "$version_id" ]; then
+                aws s3api delete-object --bucket "${BUCKET}" --key "$key" --version-id "$version_id" 2>/dev/null || true
+            fi
+        done
+        
+        # Process delete markers
+        echo "$VERSIONS" | jq -r '.DeleteMarkers[]? | .Key + " " + .VersionId' | while read -r key version_id; do
+            if [ ! -z "$key" ] && [ ! -z "$version_id" ]; then
+                aws s3api delete-object --bucket "${BUCKET}" --key "$key" --version-id "$version_id" 2>/dev/null || true
+            fi
+        done
+        
+        # Check if there are more items (pagination)
+        NEXT_TOKEN=$(echo "$VERSIONS" | jq -r '.NextToken // empty')
+        while [ ! -z "$NEXT_TOKEN" ]; do
+            echo "  Processing next batch..."
+            VERSIONS=$(aws s3api list-object-versions \
+                --bucket "${BUCKET}" \
+                --output json \
+                --max-items 1000 \
+                --starting-token "$NEXT_TOKEN" 2>/dev/null || echo '{}')
+            
+            # Process versions
+            echo "$VERSIONS" | jq -r '.Versions[]? | .Key + " " + .VersionId' | while read -r key version_id; do
+                if [ ! -z "$key" ] && [ ! -z "$version_id" ]; then
+                    aws s3api delete-object --bucket "${BUCKET}" --key "$key" --version-id "$version_id" 2>/dev/null || true
+                fi
+            done
+            
+            # Process delete markers
+            echo "$VERSIONS" | jq -r '.DeleteMarkers[]? | .Key + " " + .VersionId' | while read -r key version_id; do
+                if [ ! -z "$key" ] && [ ! -z "$version_id" ]; then
+                    aws s3api delete-object --bucket "${BUCKET}" --key "$key" --version-id "$version_id" 2>/dev/null || true
+                fi
+            done
+            
+            NEXT_TOKEN=$(echo "$VERSIONS" | jq -r '.NextToken // empty')
+        done
+        
+        echo -e "${GREEN}✓ Bucket ${BUCKET} emptied${NC}"
+    else
+        echo -e "${YELLOW}Bucket ${BUCKET} not found or already deleted${NC}"
+    fi
+done
 
 # Delete ECR images
 echo -e "\n${YELLOW}Deleting ECR images...${NC}"
 
 API_REPO="${PROJECT_NAME}-api"
 WORKER_REPO="${PROJECT_NAME}-worker"
+FRONTEND_REPO="${PROJECT_NAME}-frontend"
 
-for REPO in $API_REPO $WORKER_REPO; do
+for REPO in $API_REPO $WORKER_REPO $FRONTEND_REPO; do
     if aws ecr describe-repositories --repository-names $REPO --region $AWS_REGION 2>/dev/null; then
         echo -e "Deleting images in ${REPO}..."
         IMAGE_IDS=$(aws ecr list-images --repository-name $REPO --region $AWS_REGION --query 'imageIds[*]' --output json)
         
-        if [ "$IMAGE_IDS" != "[]" ]; then
+        if [ "$IMAGE_IDS" != "[]" ] && [ "$IMAGE_IDS" != "null" ]; then
             aws ecr batch-delete-image \
                 --repository-name $REPO \
                 --region $AWS_REGION \
@@ -83,6 +126,8 @@ for REPO in $API_REPO $WORKER_REPO; do
         fi
         
         echo -e "${GREEN}✓ Deleted images in ${REPO}${NC}"
+    else
+        echo -e "${YELLOW}Repository ${REPO} not found or already deleted${NC}"
     fi
 done
 
@@ -103,6 +148,14 @@ if aws ecs describe-clusters --clusters $CLUSTER_NAME --region $AWS_REGION 2>/de
     # Stop Worker service tasks
     WORKER_SERVICE="${PROJECT_NAME}-worker-service"
     TASK_ARNS=$(aws ecs list-tasks --cluster $CLUSTER_NAME --service-name $WORKER_SERVICE --region $AWS_REGION --query 'taskArns[]' --output text 2>/dev/null || true)
+    
+    for TASK_ARN in $TASK_ARNS; do
+        aws ecs stop-task --cluster $CLUSTER_NAME --task $TASK_ARN --region $AWS_REGION 2>/dev/null || true
+    done
+    
+    # Stop Frontend service tasks
+    FRONTEND_SERVICE="${PROJECT_NAME}-frontend-service"
+    TASK_ARNS=$(aws ecs list-tasks --cluster $CLUSTER_NAME --service-name $FRONTEND_SERVICE --region $AWS_REGION --query 'taskArns[]' --output text 2>/dev/null || true)
     
     for TASK_ARN in $TASK_ARNS; do
         aws ecs stop-task --cluster $CLUSTER_NAME --task $TASK_ARN --region $AWS_REGION 2>/dev/null || true
@@ -151,6 +204,7 @@ echo -e "\n${YELLOW}Removing local Docker images...${NC}"
 
 docker rmi ${PROJECT_NAME}-api:latest 2>/dev/null || true
 docker rmi ${PROJECT_NAME}-worker:latest 2>/dev/null || true
+docker rmi ${PROJECT_NAME}-frontend:latest 2>/dev/null || true
 
 echo -e "${GREEN}✓ Docker images removed${NC}"
 
