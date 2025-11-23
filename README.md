@@ -12,21 +12,34 @@ A scalable, full-stack web application for asynchronous document/image/video pro
 ✅ **Asynchronous Processing** - Celery task queue with SQS broker  
 ✅ **Secure Storage** - S3 with pre-signed URLs and encryption  
 ✅ **User Isolation** - Each user only sees their own documents  
+✅ **Production Ready** - Fully deployed on AWS with monitoring and logging
+
+## Recent Updates
+
+- ✨ **Protected APIs** - All document endpoints now require authentication
+- 🖼️ **Thumbnail Preview** - S3 thumbnails displayed as images with pre-signed URLs
+- 🎨 **UI Improvements** - Enhanced dashboard with job details and status tracking
+- 🔒 **User Isolation** - Users can only access their own jobs and documents
+- 📦 **Code Cleanup** - Removed redundant documentation files, consolidated into README  
 
 ## Quick Start
 
 ```bash
-# 1. Clone and configure
-git clone <repo-url>
-cd aws_project_8
-cp .env.example .env
-# Edit .env with your AWS credentials
+# 1. Clone the repository
+git clone https://github.com/sd031/AWS-Python-Celery-Bases-Document-Processing-Service.git
+cd AWS-Python-Celery-Bases-Document-Processing-Service
 
-# 2. Deploy everything
+# 2. Configure AWS credentials
+# Ensure AWS CLI is configured with your credentials
+aws configure --profile personal_new
+
+# 3. Deploy everything
 ./deploy.sh
 
-# 3. Access the web UI
-# Frontend URL will be output after deployment
+# 4. Access the application
+# Frontend URL: http://doc-processor-frontend-alb-<id>.us-east-1.elb.amazonaws.com
+# API URL: http://doc-processor-alb-<id>.us-east-1.elb.amazonaws.com
+# URLs will be displayed after successful deployment
 ```
 
 ## Architecture
@@ -43,7 +56,22 @@ cp .env.example .env
 - **ECS Fargate**: Container orchestration for frontend, API, and workers
 - **CloudWatch**: Logging and monitoring
 
-See [ARCHITECTURE.md](ARCHITECTURE.md) for detailed architecture diagrams and documentation.
+### Architecture Flow
+```
+User → Frontend ALB → React App → API ALB → FastAPI
+                                      ↓
+                                    S3 Bucket
+                                      ↓
+                                   Lambda (S3 Trigger)
+                                      ↓
+                                   SQS Queue
+                                      ↓
+                                 Celery Workers
+                                   ↙    ↘
+                            Textract  Rekognition
+                                   ↘    ↙
+                              DynamoDB + S3 Results
+```
 
 ## Project Structure
 
@@ -356,6 +384,22 @@ aws ecs describe-services \
 4. **Create Admin Dashboard** - Build an admin panel to monitor all users, jobs, and system metrics across the platform
 5. **Multi-Region Deployment** - Extend the architecture to support multi-region deployment with cross-region replication for disaster recovery
 
+## Repository
+
+**GitHub**: [AWS-Python-Celery-Bases-Document-Processing-Service](https://github.com/sd031/AWS-Python-Celery-Bases-Document-Processing-Service)
+
+### Contributing
+
+Contributions are welcome! Please feel free to submit a Pull Request.
+
+### Issues
+
+If you encounter any issues or have questions, please open an issue on GitHub.
+
 ## License
 
 MIT
+
+---
+
+**Built with ❤️ using AWS, Python, React, and Celery**
