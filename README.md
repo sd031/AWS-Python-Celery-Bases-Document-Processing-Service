@@ -14,14 +14,6 @@ A scalable, full-stack web application for asynchronous document/image/video pro
 ✅ **User Isolation** - Each user only sees their own documents  
 ✅ **Production Ready** - Fully deployed on AWS with monitoring and logging
 
-## Recent Updates
-
-- ✨ **Protected APIs** - All document endpoints now require authentication
-- 🖼️ **Thumbnail Preview** - S3 thumbnails displayed as images with pre-signed URLs
-- 🎨 **UI Improvements** - Enhanced dashboard with job details and status tracking
-- 🔒 **User Isolation** - Users can only access their own jobs and documents
-- 📦 **Code Cleanup** - Removed redundant documentation files, consolidated into README  
-
 ## Quick Start
 
 ```bash
